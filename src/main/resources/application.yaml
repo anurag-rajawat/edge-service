@@ -1,0 +1,99 @@
+server:
+  port: 9000
+  shutdown: graceful
+  netty:
+    idle-timeout: 15s
+    connection-timeout: 2s
+
+spring:
+  application:
+    name: Edge service
+  lifecycle:
+    timeout-per-shutdown-phase: 15s
+
+  cloud:
+    gateway:
+      routes:
+        - id: catalog-route
+          uri: ${CATALOG_SERVICE_URL:http://localhost:9001}/products
+          predicates:
+            - Path=/products/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: catalogCircuitBreaker
+                fallbackUri: forward:/catalog-fallback # Forwards request to this URI when the circuit is open
+
+        - id: order-route
+          uri: ${ORDER_SERVICE_URL:http://localhost:9002}/orders
+          predicates:
+            - Path=/orders/**
+          filters:
+            - name: CircuitBreaker
+              args:
+                name: orderCircuitBreaker
+
+      httpclient:
+        connect-timeout: 2000
+        response-timeout: 5s
+        pool:
+          type: elastic
+          max-idle-time: 15s # Idle time after which the communication channel will be closed
+          max-life-time: 60s # Time after which the communication channel will be closed
+
+      default-filters:
+        # Always save the web session before forwarding requests downstream.
+        - SaveSession
+
+        # Three retry attempts for all GET requests whenever the error is in the 5xx range (SERVER_ERROR)
+        - name: Retry
+          args:
+            retries: 3
+            method: GET
+            series: SERVER_ERROR
+            exceptions: java.io.IOException, java.util.concurrent.TimeoutException
+            backoff:
+              firstBackOff: 50ms
+              maxBackOff: 500ms
+              factor: 2
+              basedOnPreviousValue: false
+
+        - name: RequestRateLimiter
+          args:
+            redis-rate-limiter:
+              replenishRate: 10  # Number of tokens dripped in the bucket each second
+              burstCapacity: 20  # Allows request bursts of up to 20 requests
+              requestedTokens: 1  # Cost of 1 request
+
+
+  data:
+    # Redis to back the RequestRateLimiter gateway filter that provides server-side rate limiting support.
+    redis:
+      connect-timeout: 2s
+      host: localhost
+      port: 6379
+      timeout: 1s
+
+  session:
+    store-type: redis
+    timeout: 10m
+    redis:
+      namespace: store:edge
+
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        slidingWindowSize: 20
+        permittedNumberOfCallsInHalfOpenState: 5
+        failureRateThreshold: 50
+        waitDurationInOpenState: 15000
+  timelimiter: # Required component when using the Resilience4J implementation of Spring Cloud Circuit Breaker.
+    configs:
+      default:
+        timeoutDuration: 5s
+
+logging:
+  level:
+    io.github.resilience4j: DEBUG
+
