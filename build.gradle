@@ -2,6 +2,7 @@ plugins {
     id 'java'
     id 'org.springframework.boot' version '3.1.1'
     id 'io.spring.dependency-management' version '1.1.0'
+    id 'org.eclipse.jkube.kubernetes' version '1.13.1'
 }
 
 group = 'com.asr'
@@ -24,6 +25,7 @@ repositories {
 
 ext {
     set('springCloudVersion', "2022.0.3")
+    set('jkube.createExternalUrls', "true")
 }
 
 dependencies {
@@ -51,4 +53,44 @@ dependencyManagement {
 
 tasks.named('test') {
     useJUnitPlatform()
+}
+
+kubernetes {
+    image {
+        name = "anuragrajawat/${project.name}:${project.version}"
+    }
+
+    resources {
+        controller {
+            // TODO: Move below env vars to configmap
+            env {
+                SPRING_DATA_REDIS_HOST = 'store-redis'
+                CATALOG_SERVICE_URL = 'http://catalog-service'
+                ORDER_SERVICE_URL = 'http://order-service'
+            }
+        }
+
+        services = [{
+                        name = "${project.name}"
+                        headless = "false"
+                        type = "ClusterIP"
+                        ports = [{
+                                     protocol = "tcp"
+                                     port = "80"
+                                     targetPort = "9000"
+                                 }]
+                    }]
+
+        // TODO: Add ingress tls and host configs
+        ingress {
+            ingressRules = [{
+                                paths = [{
+                                             pathType = "Prefix"
+                                             path = "/"
+                                             serviceName = "edge-service"
+                                             servicePort = "80"
+                                         }]
+                            }]
+        }
+    }
 }
